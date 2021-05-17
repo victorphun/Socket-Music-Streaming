@@ -1,0 +1,5 @@
+To run the client side you need to have the files cloned in the vagrant vm and be in the directory that contains the files. To start the client type "python client.py 52.86.72.48 55353" in the vagrant terminal. The IP is the public IPv4 address of our ec2 instance, and 55353 is the port, so if it is being ran on a new ec2 instance the command would be "python client.py IP 55353". 
+
+The way that you run the server is by first connecting to our ec2 instance, and cloning our homework 6 folder inside the ec2 vm. That part only needs to be done once. After the files are cloned to the vm, cd into the hw folder and start the server by typing "python server.py 55353 music" into the terminal. To get this to work we also first had to do "sudo apt install python-minimal" because otherwise the python command would not work (it will also not work with python3, must be python).
+
+You also want to make sure that all of the imports we use are installed in the vagrant vm, which they all already should be. 

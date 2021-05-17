@@ -1,0 +1,326 @@
+
+
+
+
+Internet Engineering Task Force (IETF)                           V. Phun
+Request for Comments: 9999                                      L. Smith
+Category: Informational                       University of Pennsylvania
+ISSN: 2070-1721                                            21 April 2021
+
+
+                   Project 6: Streaming Music Service
+
+Abstract
+
+   This document serves as a preliminary RFC detailing Group 28's
+   implementation of the socket-based streaming music service.  The
+   implementation is built on Python and takes inspiration from RSTP and
+   HTTP.  It is built on top of a TCP connection between clients and the
+   server and uses text commands such as setup, teardown, play, stop,
+   and list to create the connection, request data, or close the
+   connection.
+
+Status of This Memo
+
+   This document is not an Internet Standards Track specification; it is
+   published for informational purposes.
+
+   This document is a product of the Internet Engineering Task Force
+   (IETF).  It represents the consensus of the IETF community.  It has
+   received public review and has been approved for publication by the
+   Internet Engineering Steering Group (IESG).  Not all documents
+   approved by the IESG are candidates for any level of Internet
+   Standard; see Section 2 of RFC 7841.
+
+   Information about the current status of this document, any errata,
+   and how to provide feedback on it may be obtained at
+   https://www.rfc-editor.org/info/rfc9999.
+
+Copyright Notice
+
+   Copyright (c) 2021 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents
+   (https://trustee.ietf.org/license-info) in effect on the date of
+   publication of this document.  Please review these documents
+   carefully, as they describe your rights and restrictions with respect
+   to this document.  Code Components extracted from this document must
+   include Simplified BSD License text as described in Section 4.e of
+   the Trust Legal Provisions and are provided without warranty as
+   described in the Simplified BSD License.
+
+Table of Contents
+
+   1.  Introduction
+   2.  Implementation Details
+     2.1.  Client Messages and Format
+     2.2.  Request Details
+     2.3.  Server Messages and Format
+       2.3.1.  Status Codes
+     2.4.  How The Server Responds to Client Messages
+       2.4.1.  Responding to LIST
+       2.4.2.  Responding to PLAY
+       2.4.3.  Responding to STOP
+     2.5.  How The Client Responds to Server Messages
+       2.5.1.  Responding to List (100)
+       2.5.2.  Responding to Play (200)
+       2.5.3.  Responding to Not Found (404)
+     2.6.  States
+       2.6.1.  Client States
+       2.6.2.  Server States
+     2.7.  Example Communications
+       2.7.1.  Listing, playing, and stopping songs
+       2.7.2.  Potential Errors
+   3.  IANA Considerations
+   4.  Security Considerations
+   Acknowledgements
+
+1.  Introduction
+
+   Socket programming is a technique used to connect two nodes on a
+   network and exchange data between them.  One node, the server,
+   listens for communication from another node, the client, on a
+   specific port at a specific IP address.  This RFC illustrates a
+   methodology for using socket programming to stream music files
+   between a server hosting the files and a client without the files.
+
+2.  Implementation Details
+
+2.1.  Client Messages and Format
+
+   The client makes requests to the server for data, similar to HTTP.
+   The requests themselves are text-based.  The client python script
+   receives an open port and IP address of the server as parameters and
+   uses those to open a socket to the server to communicate via TCP
+   connection.  Once connected, the client has three different requests
+   they can make: list, play, and stop.  No additional headers are
+   needed for this approach.  An end of line is denoted with the string
+   "END" while the end of message is denoted with a double end of line,
+   which would be "END END".  The segments of the message are separated
+   by spaces and end of line strings.
+
+2.2.  Request Details
+
+   The list command retrieves a list of songs available on the server,
+   along with their associated song ID numbers.  It does not need any
+   parameters.  An example of the request would be:
+   LIST END END
+
+   The play command plays one of the songs on the server and takes in a
+   song ID as a parameter.  Before sending this message, the client also
+   clears the MAD buffer used to store the binary audio data, to stop a
+   song if it is currently playing and get ready for the requested one.
+   An example of the request would be:
+   PLAY 1 END END
+
+   The stop command stops a currently playing song.  It takes no
+   parameters.  Before sending this message, the client also clears the
+   MAD buffer used to store the binary audio data.  An example of the
+   request would be:
+   STOP END END
+
+2.3.  Server Messages and Format
+
+   The server makes responses to multiple clients' requests for data.
+   The responses are text-based, but the data from a music stream comes
+   as binary.  The server is hosted on an Amazon AWS EC2 instance,
+   allowing any client to connect to it.  The messages either starts
+   with response or error headers depending on whether the request was
+   successful.  The server python script takes the directory holding the
+   music files and a port as parameters.  No additional headers are
+   needed for this approach.  An end of line is denoted with the string
+   "END" while the end of message is denoted with a double end of line,
+   which would be "END END", similar to our client approach.  A server
+   message has a maximum size of 4117 bytes: 4096 worth of send buffer
+   data (e.g. binary audio, list) and a remaining 21 bytes for the
+   header, status code, and end of message characters.  The segments of
+   the message are separated by spaces and end of line strings.
+
+2.3.1.  Status Codes
+
+   There are three different server response status codes: List(100) is
+   used after the server receives a request to list the songs on the
+   server.  The server responds with the status code and a text based,
+   single carriage return/line feed delimited list of the songs
+   available with their IDs.  An example of a response with this code
+   would be:
+   RESP 300 END (1.  NIN - 34 Ghosts IV END 2. cinematrik - Revolve END
+   3. grapes - I dunno.mp3) END END
+
+   Play(200) is used after the server receives a request to play a song.
+   The server responds with this status code and the binary stream of
+   data making up the song.  An example of a response with this code
+   would be:
+   RESP 200 (data) END END
+
+   Not Found(404) is used if there is an error.  For example, if the
+   client requests a song ID not available on the server, the status
+   code 404 would return.  An example of a response using this code
+   would be:
+   ERRO 404 END END
+
+2.4.  How The Server Responds to Client Messages
+
+   The server can send three messages back to the client.  The server
+   script uses two threads to handle responses: a thread for receiving
+   requests from clients and a thread for writing messages to clients.
+
+2.4.1.  Responding to LIST
+
+   If the server receives a LIST message, the write thread cycles
+   through the generated song list created at the start of the runtime
+   and makes a list of formatted songs with their IDs to be printed out
+   (in form ID_NUM.  SONG_TITLE END_OF_LINE).  The server then loops
+   through the generated list and begins adding the formatted songs to
+   response to be sent out, so long as the size of the formatted songs
+   in the response stays under the send buffer of 4096 bytes.  If the
+   next song up exceeds it, the server sends all the packaged songs and
+   begins a new message from there.  The server also checks if it is the
+   last song in the list of formatted songs (i.e. if the list of songs
+   is complete but send buffer is not reached) to send out that data as
+   a RESP 100 message.
+
+   If the server receives a LIST message while looping through an MP3
+   file to stream, the server sends a LIST message first then continues
+   to the PLAY messages.
+
+2.4.2.  Responding to PLAY
+
+   If the server receives a PLAY message, the write thread first takes
+   the song ID fed in as an argument to check if the song ID does exist
+   within the server, sending out an ERRO 404 if it does not.  When the
+   song ID is found, the song name is saved and used to open the MP3
+   file with the supplied music directory.  The server then reads the
+   file and packages up RESP 200 with binary music data split into send
+   buffer sized chunks.
+
+2.4.3.  Responding to STOP
+
+   If the server receives a STOP message, the write thread halts the
+   current reading of an MP3 file to prevent further messages from being
+   sent out.  If a song is not playing, there is no effect.
+
+2.5.  How The Client Responds to Server Messages
+
+   The client has to handle three different types of messages coming
+   from the server.  The client script uses two threads to handle server
+   responses: a thread for receiving the messages and a thread for
+   playing audio data.  Regardless of the server message type, the
+   client splits the received message into individual tokens split by a
+   space character.  For example, it would split a RESP 100 END (list
+   data) END END into [RESP, 100, END, list data, END, END].  The client
+   also has functionality to handle partial receives from the server.
+
+2.5.1.  Responding to List (100)
+
+   When a client receives a RESP 100 message, the receiving thread loops
+   through each element in the received list data and prints it out.
+
+2.5.2.  Responding to Play (200)
+
+   When a client receives a RESP 200 message, the receiving thread finds
+   the tokens corresponding to binary data by removing the first 3 and
+   last 2 tokens (RESP, 200, END then END and END).  It rejoins the
+   tokens on the space character to bring the binary data back into a
+   usable format.  The client then adds the binary audio data to the MAD
+   buffer.
+
+   Once the MAD buffer is full, the playing thread next checks if at
+   least 500 RESP 200 messages for the current song have been received.
+   This functionality is to ensure the buffer is full enough to prevent
+   stuttering during playback.  The play thread then plays the MAD
+   buffer, which would correlate with the entire song.
+
+2.5.3.  Responding to Not Found (404)
+
+   When a client receives an ERRO 404 message, the receiving thread
+   prints out an error to let the user know the supplied number was not
+   a valid song ID.
+
+2.6.  States
+
+2.6.1.  Client States
+
+   The client keeps track of three different states.  The first state,
+   IS_PLAYING, keeps track if the client is currently playing music.
+   This state is used to ensure the play thread stops playing quickly if
+   a STOP request or new PLAY request is used.  It is also used to
+   prevent late RESP 200 messages from adding to the buffer if the user
+   has already requested to stop or change songs.  The second state,
+   ARROW_LOCK, is used to ensure the ">>" character shows up at every
+   user input line.  The third state, NUM_AUDIO_MSGS_RECV, keeps track
+   of the number of RESP 200 messages received for a current song to
+   make sure the play thread plays music once the buffer is adequately
+   full.
+
+2.6.2.  Server States
+
+   The server keeps track of a few states for each client.  It keeps
+   track of a lock and the current conn to prevent overwriting and send
+   messages respectively.  The server also keeps a queue of all the
+   message requests received to process.  It keeps track of a song list
+   and music directory state to create formatted lists and find songs to
+   play.  The current requested song to play is also saved so the
+   receiving thread can communicate to the write thread what to send.  A
+   keep_playing boolean state is used in conjunction with the STOP
+   message from the client.  When a STOP message is received, this
+   boolean is switched off to stop the write thread from sending more
+   RESP 200 messages.  A list_req_while_playing boolean state is also
+   saved to let the write thread know to send a RESP 100 list message
+   before other RESP 200 audio messages if it is in the middle of
+   processing a song.
+
+2.7.  Example Communications
+
+2.7.1.  Listing, playing, and stopping songs
+
+   Server setup: python server.py /vagrant/553-hw6/music/ 12345
+   Client setup: python client.py 127.0.0.1 12345
+   Client requests: LIST END END
+   Server responds: RESP 100 END (1.  NIN - 34 Ghosts IV END 2.
+   cinematrik - Revolve END 3. grapes - I dunno) END END
+   Client requests: PLAY 3 END END
+   Server responds: RESP 200 END (song 3 data) END END
+   Server responds: RESP 200 END (song 3 data) END END
+   Server responds: RESP 200 END (song 3 data) END END
+   ...(for entire length of the song)
+   Client requests: PLAY 2 END END
+   Server responds: RESP 200 END (song 2 data) END END
+   Client requests: PLAY 1 END END
+   Server responds: RESP 200 END (song 1 data) END END
+   Client requests: STOP END END
+   Server responds: (no response necessary) Client requests: exit script
+
+2.7.2.  Potential Errors
+
+   Server setup: python server.py /vagrant/553-hw6/music/ 12345
+   Client setup: python client.py 127.0.0.1 12345
+   Client requests: LIST END END
+   Server responds: RESP 200 END (1.  NIN - 34 Ghosts IV END 2.
+   cinematrik - Revolve END 3. grapes - I dunno) END END
+   Client requests: PLAY 99 END END
+   Server responds: ERRO 404 END END
+
+3.  IANA Considerations
+
+   This document has no IANA actions.
+
+4.  Security Considerations
+
+   The dedicated TCP connection helps provide confidentiality and data
+   integrity for the data sent from server to client.  The method of
+   listening/responding on specific ports means the likelihood of the
+   data being intercepted or manipulated on its way to the client from
+   the server is low because of the
+   Peer Entity authentication.
+
+Acknowledgements
+
+   Acknowledgements to H.  Flanagan and S.  Ginoza, creators of RFC7322,
+   for their work detailing RFC style and formatting.  Further
+   acknowledgements to H.  Schulzrinne, A.  Rao, R.  Lanphier, M.
+   Westerlund, and M.  Stiemerling, Ed., creators of RFC7826, for their
+   work detailing RSTP.  Also, acknowledgements to Vincent Liu, for his
+   lectures in CIS 553.
